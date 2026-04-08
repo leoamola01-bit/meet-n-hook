@@ -8,6 +8,8 @@
     <script src="https://cdn.jsdelivr.net/npm/flowbite@2.5.2/dist/flowbite.min.js"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Supabase Client -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <style>
         body { font-family: 'Poppins', sans-serif; }
         .gradient-bg {
@@ -313,68 +315,90 @@
     </footer>
 
     <script>
+        // Supabase Client Initialization
+        const SUPABASE_URL = 'https://gbvcxpjfncxnsutnpsfm.supabase.co';
+        const SUPABASE_KEY = 'sb_publishable_Excd4BYondQhbpskBVDhTQ_luJEuecH';
+        const supabase = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
         // Global variables for photo modal
         let currentProfileId = null;
         let currentPhotoIndex = 0;
+        let profiles = [];
 
         // Admin Password (Change this!)
         const ADMIN_PASSWORD = 'admin123';
         
-        // Sample profiles with multiple images
-        let profiles = [
-            {
-                id: 1,
-                name: "Tinashe",
-                age: 25,
-                location: "Harare",
-                occupation: "Fashion Designer",
-                gender: "Female",
-                description: "Fun-loving, adventurous girl who loves dancing and good conversations. Looking for genuine connection.",
-                partner: "Confident gentleman who knows how to treat a lady right.",
-                images: [
-                    "https://images.unsplash.com/photo-1494790108755-2616b612b786?w=400&h=500&fit=crop&crop=face",
-                    "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=400&h=500&fit=crop&crop=face"
-                ]
-            },
-            {
-                id: 2,
-                name: "Takudzwa",
-                age: 28,
-                location: "Bulawayo",
-                occupation: "Nurse",
-                gender: "Female",
-                description: "Sweet, caring and family-oriented. Love cooking and weekend getaways.",
-                partner: "Responsible man ready for serious commitment.",
-                images: [
-                    "https://images.unsplash.com/photo-1436527355467-85fb69f5645c?w=400&h=500&fit=crop&crop=face",
-                    "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=400&h=500&fit=crop&crop=face"
-                ]
-            }
-        ];
-
-        // Load profiles from localStorage on page load
-        function loadProfiles() {
-            try {
-                const saved = localStorage.getItem('meetnhook_profiles');
-                if (saved) {
-                    profiles = JSON.parse(saved);
-                }
-            } catch (e) {
-                console.error('Error loading profiles:', e);
-            }
-        }
-
-        // Save profiles to localStorage
-        function saveProfiles() {
-            try {
-                localStorage.setItem('meetnhook_profiles', JSON.stringify(profiles));
-            } catch (e) {
-                console.error('Error saving profiles:', e);
-            }
-        }
-
         // WhatsApp Admin Number (Change this!)
         const ADMIN_WHATSAPP = "https://wa.me/263772345678"; // Replace with actual number
+
+        // Load profiles from Supabase
+        async function loadProfiles() {
+            try {
+                const { data, error } = await supabase
+                    .from('profiles')
+                    .select('*')
+                    .order('created_at', { ascending: false });
+                
+                if (error) throw error;
+                
+                // Convert image_url columns to images array
+                profiles = data.map(profile => ({
+                    id: profile.id,
+                    name: profile.name,
+                    age: profile.age,
+                    location: profile.location,
+                    occupation: profile.occupation,
+                    gender: profile.gender,
+                    description: profile.description,
+                    partner: profile.partner,
+                    images: [
+                        profile.image_url1,
+                        profile.image_url2,
+                        profile.image_url3,
+                        profile.image_url4,
+                        profile.image_url5
+                    ].filter(img => img && img.trim() !== '')
+                })).filter(profile => profile.images.length > 0); // Only show profiles with images
+                
+                renderProfiles();
+            } catch (error) {
+                console.error('Error loading profiles:', error);
+                alert('Error loading profiles. Please check your Supabase connection.');
+            }
+        }
+
+        // Save profile to Supabase
+        async function saveProfile(profileData) {
+            try {
+                const { data, error } = await supabase
+                    .from('profiles')
+                    .insert([profileData])
+                    .select()
+                    .single();
+                
+                if (error) throw error;
+                return data;
+            } catch (error) {
+                console.error('Error saving profile:', error);
+                throw error;
+            }
+        }
+
+        // Delete profile from Supabase
+        async function deleteProfile(id) {
+            try {
+                const { error } = await supabase
+                    .from('profiles')
+                    .delete()
+                    .eq('id', id);
+                
+                if (error) throw error;
+                return true;
+            } catch (error) {
+                console.error('Error deleting profile:', error);
+                throw error;
+            }
+        }
 
         function checkAdmin() {
             const password = document.getElementById('admin-password').value;
@@ -387,7 +411,7 @@
             }
         }
 
-        function addProfile() {
+        async function addProfile() {
             const imageInput = document.getElementById('profile-images');
             const name = document.getElementById('profile-name').value.trim();
             const age = document.getElementById('profile-age').value;
@@ -428,8 +452,8 @@
                     loadedCount++;
                     
                     if (loadedCount === files.length) {
-                        const newProfile = {
-                            id: Date.now(),
+                        // Prepare profile data for Supabase (image data URLs)
+                        const profileData = {
                             name,
                             age: parseInt(age),
                             location,
@@ -437,20 +461,29 @@
                             gender,
                             description,
                             partner,
-                            images: readImages.filter(img => img && img.length > 0)
+                            image_url1: readImages[0] || null,
+                            image_url2: readImages[1] || null,
+                            image_url3: readImages[2] || null,
+                            image_url4: readImages[3] || null,
+                            image_url5: readImages[4] || null
                         };
                         
-                        if (newProfile.images.length === 0) {
+                        if (readImages.filter(img => img && img.length > 0).length === 0) {
                             alert('No valid images were loaded. Please try again.');
                             return;
                         }
                         
-                        profiles.unshift(newProfile);
-                        saveProfiles();
-                        renderProfiles();
-                        loadAdminProfiles();
-                        clearForm();
-                        alert('✅ Profile added successfully with ' + newProfile.images.length + ' images!');
+                        // Save to Supabase
+                        saveProfile(profileData)
+                            .then(() => {
+                                loadProfiles(); // Reload profiles
+                                loadAdminProfiles();
+                                clearForm();
+                                alert('✅ Profile added successfully with ' + readImages.filter(img => img && img.length > 0).length + ' images!');
+                            })
+                            .catch((error) => {
+                                alert('Error adding profile: ' + error.message);
+                            });
                     }
                 };
                 reader.onerror = function() {
@@ -460,12 +493,15 @@
             });
         }
 
-        function deleteProfile(id) {
+        async function deleteProfile(id) {
             if (confirm('Delete this profile?')) {
-                profiles = profiles.filter(p => p.id !== id);
-                saveProfiles();
-                renderProfiles();
-                loadAdminProfiles();
+                try {
+                    await deleteProfile(id);
+                    loadProfiles(); // Reload profiles
+                    loadAdminProfiles();
+                } catch (error) {
+                    alert('Error deleting profile: ' + error.message);
+                }
             }
         }
 
@@ -570,7 +606,7 @@
             }
         }
 
-        function loadAdminProfiles() {
+        async function loadAdminProfiles() {
             const list = document.getElementById('profiles-list');
             list.innerHTML = profiles.map(profile => `
                 <div class="glass-effect p-4 rounded-2xl flex justify-between items-center">
@@ -587,6 +623,9 @@
 
         // Event Listeners - All buttons work perfectly
         document.addEventListener('DOMContentLoaded', function() {
+            // Load profiles from Supabase on page load
+            loadProfiles();
+            
             // Admin login button
             document.getElementById('admin-login-btn').addEventListener('click', checkAdmin);
             
@@ -600,13 +639,7 @@
                 }
             });
 
-            // Initial load
-            loadProfiles();
-            renderProfiles();
-        });
-
-        // Mobile menu toggle
-        function initMobileMenu() {
+            // Mobile menu toggle
             const btn = document.getElementById('mobile-menu-btn');
             if (btn) {
                 btn.addEventListener('click', function() {
@@ -616,7 +649,7 @@
                     }
                 });
             }
-        }
+        });
 
         // Smooth scroll
         document.addEventListener('DOMContentLoaded', function() {
@@ -643,7 +676,6 @@
                     }
                 });
             }
-            initMobileMenu();
         });
     </script>
 </body>
