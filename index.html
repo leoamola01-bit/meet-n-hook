@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Meet-n-Hook - Find Love & Fun in Zimbabwe</title>
+    <!-- Tailwind CSS CDN (for development - replace with production build for production) -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/flowbite@2.5.2/dist/flowbite.min.js"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
@@ -320,10 +321,12 @@
         let currentPhotoIndex = 0;
         let profiles = [];
 
-        // Supabase Configuration - DECLARED ONLY ONCE
+        // Supabase Configuration - FIXED: No redeclaration of supabase
         const SUPABASE_URL = 'https://gbvcxpjfncxnsutnpsfm.supabase.co';
         const SUPABASE_KEY = 'sb_publishable_Excd4BYondQhbpskBVDhTQ_luJEuecH';
-        const supabase = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+        
+        // Create Supabase client using the global supabase object from CDN
+        const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
         // Admin Password (Change this!)
         const ADMIN_PASSWORD = 'admin123';
@@ -334,7 +337,7 @@
         // Load profiles from Supabase
         async function loadProfiles() {
             try {
-                const { data, error } = await supabase
+                const { data, error } = await supabaseClient
                     .from('profiles')
                     .select('*')
                     .order('created_at', { ascending: false });
@@ -371,7 +374,7 @@
         // Save profile to Supabase
         async function saveProfile(profileData) {
             try {
-                const { data, error } = await supabase
+                const { data, error } = await supabaseClient
                     .from('profiles')
                     .insert([profileData])
                     .select()
@@ -388,7 +391,7 @@
         // Delete profile from Supabase
         async function deleteProfile(id) {
             try {
-                const { error } = await supabase
+                const { error } = await supabaseClient
                     .from('profiles')
                     .delete()
                     .eq('id', id);
@@ -404,7 +407,7 @@
         // Load profiles for admin panel
         async function loadAdminProfiles() {
             try {
-                const { data, error } = await supabase
+                const { data, error } = await supabaseClient
                     .from('profiles')
                     .select('id, name, age, location, image_url1')
                     .order('created_at', { ascending: false });
