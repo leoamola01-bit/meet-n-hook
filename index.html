@@ -315,15 +315,15 @@
     </footer>
 
     <script>
-        // Supabase Client Initialization
-        const SUPABASE_URL = 'https://gbvcxpjfncxnsutnpsfm.supabase.co';
-        const SUPABASE_KEY = 'sb_publishable_Excd4BYondQhbpskBVDhTQ_luJEuecH';
-        const supabase = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
-
         // Global variables for photo modal
         let currentProfileId = null;
         let currentPhotoIndex = 0;
         let profiles = [];
+
+        // Supabase Configuration
+        const SUPABASE_URL = 'https://gbvcxpjfncxnsutnpsfm.supabase.co';
+        const SUPABASE_KEY = 'sb_publishable_Excd4BYondQhbpskBVDhTQ_luJEuecH';
+        const supabase = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
         // Admin Password (Change this!)
         const ADMIN_PASSWORD = 'admin123';
@@ -357,13 +357,14 @@
                         profile.image_url3,
                         profile.image_url4,
                         profile.image_url5
-                    ].filter(img => img && img.trim() !== '')
+                    ].filter(url => url) // Filter out null/empty URLs
                 })).filter(profile => profile.images.length > 0); // Only show profiles with images
                 
                 renderProfiles();
             } catch (error) {
                 console.error('Error loading profiles:', error);
-                alert('Error loading profiles. Please check your Supabase connection.');
+                profiles = [];
+                renderProfiles();
             }
         }
 
@@ -397,6 +398,33 @@
             } catch (error) {
                 console.error('Error deleting profile:', error);
                 throw error;
+            }
+        }
+
+        // Load profiles for admin panel
+        async function loadAdminProfiles() {
+            try {
+                const { data, error } = await supabase
+                    .from('profiles')
+                    .select('id, name, age, location, image_url1')
+                    .order('created_at', { ascending: false });
+                
+                if (error) throw error;
+                
+                const list = document.getElementById('profiles-list');
+                list.innerHTML = data.map(profile => `
+                    <div class="glass-effect p-4 rounded-2xl flex justify-between items-center">
+                        <div>
+                            <strong>${profile.name}</strong> (${profile.age}, ${profile.location})
+                            <div class="text-sm text-pink-200">1+ images</div>
+                        </div>
+                        <button onclick="deleteProfileAdmin(${profile.id})" class="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-xl text-sm">
+                            Delete
+                        </button>
+                    </div>
+                `).join('');
+            } catch (error) {
+                console.error('Error loading admin profiles:', error);
             }
         }
 
@@ -452,7 +480,7 @@
                     loadedCount++;
                     
                     if (loadedCount === files.length) {
-                        // Prepare profile data for Supabase (image data URLs)
+                        // Prepare profile data for Supabase (image_url1 to image_url5)
                         const profileData = {
                             name,
                             age: parseInt(age),
@@ -468,21 +496,20 @@
                             image_url5: readImages[4] || null
                         };
                         
-                        if (readImages.filter(img => img && img.length > 0).length === 0) {
+                        if (!readImages[0]) {
                             alert('No valid images were loaded. Please try again.');
                             return;
                         }
                         
-                        // Save to Supabase
                         saveProfile(profileData)
                             .then(() => {
                                 loadProfiles(); // Reload profiles
                                 loadAdminProfiles();
                                 clearForm();
-                                alert('✅ Profile added successfully with ' + readImages.filter(img => img && img.length > 0).length + ' images!');
+                                alert('✅ Profile added successfully with ' + readImages.filter(img => img).length + ' images!');
                             })
-                            .catch((error) => {
-                                alert('Error adding profile: ' + error.message);
+                            .catch(() => {
+                                alert('❌ Error saving profile. Please try again.');
                             });
                     }
                 };
@@ -493,14 +520,14 @@
             });
         }
 
-        async function deleteProfile(id) {
+        async function deleteProfileAdmin(id) {
             if (confirm('Delete this profile?')) {
                 try {
                     await deleteProfile(id);
-                    loadProfiles(); // Reload profiles
+                    loadProfiles();
                     loadAdminProfiles();
                 } catch (error) {
-                    alert('Error deleting profile: ' + error.message);
+                    alert('Error deleting profile');
                 }
             }
         }
@@ -606,26 +633,8 @@
             }
         }
 
-        async function loadAdminProfiles() {
-            const list = document.getElementById('profiles-list');
-            list.innerHTML = profiles.map(profile => `
-                <div class="glass-effect p-4 rounded-2xl flex justify-between items-center">
-                    <div>
-                        <strong>${profile.name}</strong> (${profile.age}, ${profile.location})
-                        <div class="text-sm text-pink-200">${(profile.images ? profile.images.length : 0)} images</div>
-                    </div>
-                    <button onclick="deleteProfile(${profile.id})" class="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-xl text-sm">
-                        Delete
-                    </button>
-                </div>
-            `).join('');
-        }
-
         // Event Listeners - All buttons work perfectly
         document.addEventListener('DOMContentLoaded', function() {
-            // Load profiles from Supabase on page load
-            loadProfiles();
-            
             // Admin login button
             document.getElementById('admin-login-btn').addEventListener('click', checkAdmin);
             
@@ -639,7 +648,12 @@
                 }
             });
 
-            // Mobile menu toggle
+            // Initial load from Supabase
+            loadProfiles();
+        });
+
+        // Mobile menu toggle
+        function initMobileMenu() {
             const btn = document.getElementById('mobile-menu-btn');
             if (btn) {
                 btn.addEventListener('click', function() {
@@ -649,7 +663,7 @@
                     }
                 });
             }
-        });
+        }
 
         // Smooth scroll
         document.addEventListener('DOMContentLoaded', function() {
@@ -676,6 +690,7 @@
                     }
                 });
             }
+            initMobileMenu();
         });
     </script>
 </body>
