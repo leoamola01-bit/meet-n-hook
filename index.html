@@ -144,6 +144,15 @@
         }
         .prev-arrow { left: -25px; }
         .next-arrow { right: -25px; }
+        /* New profile animation */
+        .new-profile {
+            animation: newProfilePulse 2s ease-out;
+        }
+        @keyframes newProfilePulse {
+            0% { transform: scale(0.95); opacity: 0.7; }
+            50% { transform: scale(1.05); opacity: 1; }
+            100% { transform: scale(1); opacity: 1; }
+        }
     </style>
 </head>
 <body class="bg-gradient-to-br from-rose-400 via-pink-500 to-purple-600 min-h-screen overflow-x-hidden">
@@ -320,19 +329,44 @@
         let currentProfileId = null;
         let currentPhotoIndex = 0;
         let profiles = [];
+        let realtimeSubscription = null; // Track real-time subscription
 
-        // Supabase Configuration - FIXED: No redeclaration of supabase
+        // Supabase Configuration
         const SUPABASE_URL = 'https://gbvcxpjfncxnsutnpsfm.supabase.co';
         const SUPABASE_KEY = 'sb_publishable_Excd4BYondQhbpskBVDhTQ_luJEuecH';
         
-        // Create Supabase client using the global supabase object from CDN
         const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
         // Admin Password (Change this!)
         const ADMIN_PASSWORD = 'admin123';
         
         // WhatsApp Admin Number (Change this!)
-        const ADMIN_WHATSAPP = "https://wa.me/263772345678"; // Replace with actual number
+        const ADMIN_WHATSAPP = "https://wa.me/263772345678";
+
+        // FIXED: Initialize real-time subscription for automatic updates across all devices
+        function initRealtime() {
+            if (realtimeSubscription) {
+                supabaseClient.removeChannel(realtimeSubscription);
+            }
+
+            realtimeSubscription = supabaseClient
+                .channel('profiles')
+                .on('postgres_changes', 
+                    { 
+                        event: '*', 
+                        schema: 'public', 
+                        table: 'profiles' 
+                    }, 
+                    (payload) => {
+                        console.log('Real-time update:', payload);
+                        // Automatically refresh profiles when any change happens (INSERT, UPDATE, DELETE)
+                        loadProfiles();
+                    }
+                )
+                .subscribe((status) => {
+                    console.log('Real-time subscription status:', status);
+                });
+        }
 
         // Load profiles from Supabase
         async function loadProfiles() {
@@ -360,8 +394,8 @@
                         profile.image_url3,
                         profile.image_url4,
                         profile.image_url5
-                    ].filter(url => url) // Filter out null/empty URLs
-                })).filter(profile => profile.images.length > 0); // Only show profiles with images
+                    ].filter(url => url)
+                })).filter(profile => profile.images.length > 0);
                 
                 renderProfiles();
             } catch (error) {
@@ -464,7 +498,6 @@
 
             const files = Array.from(imageInput.files);
             
-            // Check file sizes (10MB limit)
             for (let i = 0; i < files.length; i++) {
                 const file = files[i];
                 if (file.size > 10 * 1024 * 1024) {
@@ -483,7 +516,6 @@
                     loadedCount++;
                     
                     if (loadedCount === files.length) {
-                        // Prepare profile data for Supabase (image_url1 to image_url5)
                         const profileData = {
                             name,
                             age: parseInt(age),
@@ -506,10 +538,10 @@
                         
                         saveProfile(profileData)
                             .then(() => {
-                                loadProfiles(); // Reload profiles
+                                // Real-time will automatically update all devices
                                 loadAdminProfiles();
                                 clearForm();
-                                alert('✅ Profile added successfully with ' + readImages.filter(img => img).length + ' images!');
+                                alert('✅ Profile added successfully with ' + readImages.filter(img => img).length + ' images! It will appear instantly on all devices.');
                             })
                             .catch(() => {
                                 alert('❌ Error saving profile. Please try again.');
@@ -527,8 +559,8 @@
             if (confirm('Delete this profile?')) {
                 try {
                     await deleteProfile(id);
-                    loadProfiles();
                     loadAdminProfiles();
+                    // Real-time will automatically update all devices
                 } catch (error) {
                     alert('Error deleting profile');
                 }
@@ -548,16 +580,17 @@
 
         function renderProfiles() {
             const grid = document.getElementById('profiles-grid');
-            grid.innerHTML = profiles.map(profile => {
+            grid.innerHTML = profiles.map((profile, index) => {
                 const imageCount = profile.images ? profile.images.length : 0;
                 const firstImage = profile.images && profile.images[0] ? profile.images[0] : '';
+                const isNewProfile = index === 0; // First profile (newest) gets animation
                 return `
-                <div class="profile-card glass-effect rounded-3xl p-8 cursor-pointer group relative overflow-hidden bg-gradient-to-br from-white/20 to-transparent profile-${profile.id}">
+                <div class="profile-card glass-effect rounded-3xl p-8 cursor-pointer group relative overflow-hidden bg-gradient-to-br from-white/20 to-transparent profile-${profile.id} ${isNewProfile ? 'new-profile' : ''}">
                     <div class="absolute top-6 right-6 bg-pink-500 text-white px-4 py-2 rounded-full text-sm font-bold opacity-0 group-hover:opacity-100 transition-all duration-300">
                         ${imageCount} Photos • Verified
                     </div>
                     <div class="relative z-10">
-                        <div class="w-32 h-32 mx-auto mb-6 rounded-3xl overflow-hidden shadow-2xl transform group-hover:scale-110 transition-transform duration-500 image-carousel" onclick="openPhotoModal(${profile.id}, 0)" style="cursor: pointer;">
+                        <div class="w-32 h-32 mx-auto mb-6 rounded-3xl overflow-hidden shadow-2xl transform group-hover:scale-110 transition-transform duration-500 image-carousel" onclick="openPhotoModal(${profile.id}, 0)">
                             ${firstImage ? `<img src="${firstImage}" alt="${profile.name}" class="w-full h-full object-cover">` : '<div class="w-full h-full bg-gray-500 flex items-center justify-center text-white text-sm">No Image</div>'}
                             ${imageCount > 1 ? `
                                 <div class="absolute inset-0 bg-gradient-to-t from-black/50 to-transparent flex items-end p-2">
@@ -599,13 +632,13 @@
             if (profile && profile.images && profile.images.length > 0) {
                 showCurrentPhoto();
                 document.getElementById('photo-modal').style.display = 'block';
-                document.body.style.overflow = 'hidden'; // Prevent background scroll
+                document.body.style.overflow = 'hidden';
             }
         }
 
         function closePhotoModal() {
             document.getElementById('photo-modal').style.display = 'none';
-            document.body.style.overflow = 'auto'; // Restore scroll
+            document.body.style.overflow = 'auto';
         }
 
         function showCurrentPhoto() {
@@ -615,7 +648,6 @@
                 document.getElementById('modal-photo-count').textContent = 
                     `${currentPhotoIndex + 1} / ${profile.images.length}`;
                 
-                // Show/hide arrows
                 document.getElementById('prev-arrow').style.display = currentPhotoIndex > 0 ? 'flex' : 'none';
                 document.getElementById('next-arrow').style.display = currentPhotoIndex < profile.images.length - 1 ? 'flex' : 'none';
             }
@@ -636,23 +668,27 @@
             }
         }
 
-        // Event Listeners - All buttons work perfectly
+        // Event Listeners
         document.addEventListener('DOMContentLoaded', function() {
-            // Admin login button
             document.getElementById('admin-login-btn').addEventListener('click', checkAdmin);
-            
-            // Add profile button
             document.getElementById('add-profile-btn').addEventListener('click', addProfile);
             
-            // Close modal on Escape key
             document.addEventListener('keydown', function(e) {
                 if (e.key === 'Escape') {
                     closePhotoModal();
                 }
             });
 
-            // Initial load from Supabase
+            // FIXED: Initialize real-time updates FIRST, then load initial profiles
+            initRealtime();
             loadProfiles();
+        });
+
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', function() {
+            if (realtimeSubscription) {
+                supabaseClient.removeChannel(realtimeSubscription);
+            }
         });
 
         // Mobile menu toggle
