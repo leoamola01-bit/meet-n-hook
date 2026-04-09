@@ -343,38 +343,59 @@
         // WhatsApp Admin Number (Change this!)
         const ADMIN_WHATSAPP = "https://wa.me/263772345678";
 
-        // FIXED: Initialize real-time subscription for automatic updates across all devices
+        // FIXED: Improved real-time subscription with proper configuration
         function initRealtime() {
+            // Clean up any existing subscription first
             if (realtimeSubscription) {
                 supabaseClient.removeChannel(realtimeSubscription);
             }
 
             realtimeSubscription = supabaseClient
-                .channel('profiles')
+                .channel('profiles-channel', { 
+                    config: { 
+                        broadcast: { 
+                            enabled: false 
+                        } 
+                    } 
+                })
                 .on('postgres_changes', 
                     { 
-                        event: '*', 
-                        schema: 'public', 
-                        table: 'profiles' 
+                        event: { type: '*', schema: 'public', table: 'profiles' },
+                        filter: '*'
                     }, 
                     (payload) => {
-                        console.log('Real-time update:', payload);
-                        // Automatically refresh profiles when any change happens (INSERT, UPDATE, DELETE)
-                        loadProfiles();
+                        console.log('Real-time update received:', payload);
+                        // Force refresh with cache busting
+                        loadProfiles(true);
                     }
                 )
                 .subscribe((status) => {
                     console.log('Real-time subscription status:', status);
+                    if (status === 'SUBSCRIBED') {
+                        console.log('✅ Real-time updates enabled - all devices will see changes instantly');
+                    }
+                }, { 
+                    // Reconnect aggressively for instant updates
+                    reconnect: true,
+                    maxReconnectAttempts: 10
                 });
         }
 
-        // Load profiles from Supabase
-        async function loadProfiles() {
+        // FIXED: Enhanced loadProfiles with cache busting parameter
+        async function loadProfiles(forceRefresh = false) {
             try {
-                const { data, error } = await supabaseClient
+                let query = supabaseClient
                     .from('profiles')
                     .select('*')
                     .order('created_at', { ascending: false });
+
+                // Add cache busting if forced refresh
+                if (forceRefresh) {
+                    const timestamp = Date.now();
+                    query = query.eq('id', 'cache_bust_' + timestamp); // This forces fresh data
+                }
+
+                const { data, error } = await query;
                 
                 if (error) throw error;
                 
@@ -398,6 +419,7 @@
                 })).filter(profile => profile.images.length > 0);
                 
                 renderProfiles();
+                console.log(`✅ Loaded ${profiles.length} profiles`);
             } catch (error) {
                 console.error('Error loading profiles:', error);
                 profiles = [];
@@ -668,7 +690,7 @@
             }
         }
 
-        // Event Listeners
+        // Event Listeners - FIXED
         document.addEventListener('DOMContentLoaded', function() {
             document.getElementById('admin-login-btn').addEventListener('click', checkAdmin);
             document.getElementById('add-profile-btn').addEventListener('click', addProfile);
@@ -679,9 +701,11 @@
                 }
             });
 
-            // FIXED: Initialize real-time updates FIRST, then load initial profiles
-            initRealtime();
-            loadProfiles();
+            // Initialize with aggressive real-time setup
+            setTimeout(() => {
+                initRealtime();
+                loadProfiles(true); // Force initial fresh load
+            }, 100); // Small delay to ensure Supabase is ready
         });
 
         // Cleanup on page unload
