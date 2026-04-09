@@ -226,6 +226,9 @@
                 </p>
             </div>
             
+            <!-- Status indicator -->
+            <div id="profiles-status" class="text-center text-white mb-8 text-lg font-semibold hidden"></div>
+            
             <!-- Profiles Grid -->
             <div id="profiles-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 max-w-7xl mx-auto">
                 <!-- Profiles will be loaded here dynamically -->
@@ -325,81 +328,44 @@
     </footer>
 
     <script>
-        // Global variables for photo modal
+        // Global variables
+        let profiles = [];
         let currentProfileId = null;
         let currentPhotoIndex = 0;
-        let profiles = [];
-        let realtimeSubscription = null; // Track real-time subscription
-
+        
         // Supabase Configuration
         const SUPABASE_URL = 'https://gbvcxpjfncxnsutnpsfm.supabase.co';
         const SUPABASE_KEY = 'sb_publishable_Excd4BYondQhbpskBVDhTQ_luJEuecH';
-        
         const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
-        // Admin Password (Change this!)
+        // Admin config
         const ADMIN_PASSWORD = 'admin123';
-        
-        // WhatsApp Admin Number (Change this!)
         const ADMIN_WHATSAPP = "https://wa.me/263772345678";
 
-        // FIXED: Improved real-time subscription with proper configuration
-        function initRealtime() {
-            // Clean up any existing subscription first
-            if (realtimeSubscription) {
-                supabaseClient.removeChannel(realtimeSubscription);
-            }
-
-            realtimeSubscription = supabaseClient
-                .channel('profiles-channel', { 
-                    config: { 
-                        broadcast: { 
-                            enabled: false 
-                        } 
-                    } 
-                })
-                .on('postgres_changes', 
-                    { 
-                        event: { type: '*', schema: 'public', table: 'profiles' },
-                        filter: '*'
-                    }, 
-                    (payload) => {
-                        console.log('Real-time update received:', payload);
-                        // Force refresh with cache busting
-                        loadProfiles(true);
-                    }
-                )
-                .subscribe((status) => {
-                    console.log('Real-time subscription status:', status);
-                    if (status === 'SUBSCRIBED') {
-                        console.log('✅ Real-time updates enabled - all devices will see changes instantly');
-                    }
-                }, { 
-                    // Reconnect aggressively for instant updates
-                    reconnect: true,
-                    maxReconnectAttempts: 10
-                });
+        // FIXED: Reliable polling (3 seconds) - no realtime issues
+        function startPolling() {
+            loadProfiles(); // Initial load
+            setInterval(loadProfiles, 3000); // Poll every 3 seconds
+            document.getElementById('profiles-status').textContent = '🔄 Live sync every 3 seconds';
+            document.getElementById('profiles-status').classList.remove('hidden');
         }
 
-        // FIXED: Enhanced loadProfiles with cache busting parameter
-        async function loadProfiles(forceRefresh = false) {
+        // FIXED: Clean loadProfiles - no cache busting errors
+        async function loadProfiles() {
             try {
-                let query = supabaseClient
+                const { data, error } = await supabaseClient
                     .from('profiles')
                     .select('*')
                     .order('created_at', { ascending: false });
 
-                // Add cache busting if forced refresh
-                if (forceRefresh) {
-                    const timestamp = Date.now();
-                    query = query.eq('id', 'cache_bust_' + timestamp); // This forces fresh data
+                if (error) {
+                    console.error('Load error:', error);
+                    showStatus('❌ Load failed - showing cached profiles', 'text-red-400');
+                    renderProfiles();
+                    return;
                 }
 
-                const { data, error } = await query;
-                
-                if (error) throw error;
-                
-                // Convert image_url columns to images array
+                // Transform data
                 profiles = data.map(profile => ({
                     id: profile.id,
                     name: profile.name,
@@ -417,197 +383,33 @@
                         profile.image_url5
                     ].filter(url => url)
                 })).filter(profile => profile.images.length > 0);
-                
+
                 renderProfiles();
-                console.log(`✅ Loaded ${profiles.length} profiles`);
+                showStatus(`✅ ${profiles.length} profiles loaded`, 'text-green-400');
+                console.log(`Loaded ${profiles.length} profiles`);
+
             } catch (error) {
-                console.error('Error loading profiles:', error);
-                profiles = [];
+                console.error('Load error:', error);
+                showStatus('❌ Network error - using cache', 'text-yellow-400');
                 renderProfiles();
             }
         }
 
-        // Save profile to Supabase
-        async function saveProfile(profileData) {
-            try {
-                const { data, error } = await supabaseClient
-                    .from('profiles')
-                    .insert([profileData])
-                    .select()
-                    .single();
-                
-                if (error) throw error;
-                return data;
-            } catch (error) {
-                console.error('Error saving profile:', error);
-                throw error;
-            }
+        function showStatus(message, color = 'text-white') {
+            const statusEl = document.getElementById('profiles-status');
+            statusEl.textContent = message;
+            statusEl.className = `text-center mb-8 text-lg font-semibold ${color} ${statusEl.classList.contains('hidden') ? '' : ''}`;
         }
 
-        // Delete profile from Supabase
-        async function deleteProfile(id) {
-            try {
-                const { error } = await supabaseClient
-                    .from('profiles')
-                    .delete()
-                    .eq('id', id);
-                
-                if (error) throw error;
-                return true;
-            } catch (error) {
-                console.error('Error deleting profile:', error);
-                throw error;
-            }
-        }
-
-        // Load profiles for admin panel
-        async function loadAdminProfiles() {
-            try {
-                const { data, error } = await supabaseClient
-                    .from('profiles')
-                    .select('id, name, age, location, image_url1')
-                    .order('created_at', { ascending: false });
-                
-                if (error) throw error;
-                
-                const list = document.getElementById('profiles-list');
-                list.innerHTML = data.map(profile => `
-                    <div class="glass-effect p-4 rounded-2xl flex justify-between items-center">
-                        <div>
-                            <strong>${profile.name}</strong> (${profile.age}, ${profile.location})
-                            <div class="text-sm text-pink-200">1+ images</div>
-                        </div>
-                        <button onclick="deleteProfileAdmin(${profile.id})" class="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-xl text-sm">
-                            Delete
-                        </button>
-                    </div>
-                `).join('');
-            } catch (error) {
-                console.error('Error loading admin profiles:', error);
-            }
-        }
-
-        function checkAdmin() {
-            const password = document.getElementById('admin-password').value;
-            if (password === ADMIN_PASSWORD) {
-                document.getElementById('admin-login').classList.add('hidden');
-                document.getElementById('admin-panel').classList.remove('hidden');
-                loadAdminProfiles();
-            } else {
-                alert('❌ Wrong password!');
-            }
-        }
-
-        async function addProfile() {
-            const imageInput = document.getElementById('profile-images');
-            const name = document.getElementById('profile-name').value.trim();
-            const age = document.getElementById('profile-age').value;
-            const location = document.getElementById('profile-location').value.trim();
-            const occupation = document.getElementById('profile-occupation').value.trim();
-            const gender = document.getElementById('profile-gender').value;
-            const description = document.getElementById('profile-description').value.trim();
-            const partner = document.getElementById('partner-description').value.trim();
-
-            if (!name || !age || !location || !gender || !description || !partner || !imageInput.files || imageInput.files.length === 0) {
-                alert('Please fill all required fields and select at least 1 image (max 5)');
-                return;
-            }
-
-            if (imageInput.files.length > 5) {
-                alert('Maximum 5 images allowed');
-                return;
-            }
-
-            const files = Array.from(imageInput.files);
-            
-            for (let i = 0; i < files.length; i++) {
-                const file = files[i];
-                if (file.size > 10 * 1024 * 1024) {
-                    alert(`Image ${i + 1} (${file.name}) is too large (max 10MB)`);
-                    return;
-                }
-            }
-
-            const readImages = [];
-            let loadedCount = 0;
-
-            files.forEach((file, index) => {
-                const reader = new FileReader();
-                reader.onload = function(e) {
-                    readImages[index] = e.target.result;
-                    loadedCount++;
-                    
-                    if (loadedCount === files.length) {
-                        const profileData = {
-                            name,
-                            age: parseInt(age),
-                            location,
-                            occupation,
-                            gender,
-                            description,
-                            partner,
-                            image_url1: readImages[0] || null,
-                            image_url2: readImages[1] || null,
-                            image_url3: readImages[2] || null,
-                            image_url4: readImages[3] || null,
-                            image_url5: readImages[4] || null
-                        };
-                        
-                        if (!readImages[0]) {
-                            alert('No valid images were loaded. Please try again.');
-                            return;
-                        }
-                        
-                        saveProfile(profileData)
-                            .then(() => {
-                                // Real-time will automatically update all devices
-                                loadAdminProfiles();
-                                clearForm();
-                                alert('✅ Profile added successfully with ' + readImages.filter(img => img).length + ' images! It will appear instantly on all devices.');
-                            })
-                            .catch(() => {
-                                alert('❌ Error saving profile. Please try again.');
-                            });
-                    }
-                };
-                reader.onerror = function() {
-                    alert('Error reading image file. Please select valid images.');
-                };
-                reader.readAsDataURL(file);
-            });
-        }
-
-        async function deleteProfileAdmin(id) {
-            if (confirm('Delete this profile?')) {
-                try {
-                    await deleteProfile(id);
-                    loadAdminProfiles();
-                    // Real-time will automatically update all devices
-                } catch (error) {
-                    alert('Error deleting profile');
-                }
-            }
-        }
-
-        function clearForm() {
-            document.getElementById('profile-images').value = '';
-            document.getElementById('profile-name').value = '';
-            document.getElementById('profile-age').value = '';
-            document.getElementById('profile-location').value = '';
-            document.getElementById('profile-occupation').value = '';
-            document.getElementById('profile-gender').value = '';
-            document.getElementById('profile-description').value = '';
-            document.getElementById('partner-description').value = '';
-        }
-
+        // Render profiles to UI
         function renderProfiles() {
             const grid = document.getElementById('profiles-grid');
             grid.innerHTML = profiles.map((profile, index) => {
-                const imageCount = profile.images ? profile.images.length : 0;
-                const firstImage = profile.images && profile.images[0] ? profile.images[0] : '';
-                const isNewProfile = index === 0; // First profile (newest) gets animation
+                const imageCount = profile.images.length;
+                const firstImage = profile.images[0];
+                const isNew = index === 0;
                 return `
-                <div class="profile-card glass-effect rounded-3xl p-8 cursor-pointer group relative overflow-hidden bg-gradient-to-br from-white/20 to-transparent profile-${profile.id} ${isNewProfile ? 'new-profile' : ''}">
+                <div class="profile-card glass-effect rounded-3xl p-8 cursor-pointer group relative overflow-hidden bg-gradient-to-br from-white/20 to-transparent profile-${profile.id} ${isNew ? 'new-profile' : ''}">
                     <div class="absolute top-6 right-6 bg-pink-500 text-white px-4 py-2 rounded-full text-sm font-bold opacity-0 group-hover:opacity-100 transition-all duration-300">
                         ${imageCount} Photos • Verified
                     </div>
@@ -643,19 +445,147 @@
                     </div>
                 </div>
                 `;
-            }).join('');
+            }).join('') || '<div class="col-span-full text-center py-20 text-white text-xl">No profiles yet. Add some via admin panel!</div>';
         }
 
-        // Photo Modal Functions
+        // Admin functions
+        async function saveProfile(profileData) {
+            const { data, error } = await supabaseClient
+                .from('profiles')
+                .insert([profileData])
+                .select()
+                .single();
+            if (error) throw error;
+            return data;
+        }
+
+        async function deleteProfile(id) {
+            const { error } = await supabaseClient
+                .from('profiles')
+                .delete()
+                .eq('id', id);
+            if (error) throw error;
+            return true;
+        }
+
+        async function loadAdminProfiles() {
+            try {
+                const { data, error } = await supabaseClient
+                    .from('profiles')
+                    .select('id, name, age, location, image_url1')
+                    .order('created_at', { ascending: false });
+                
+                if (error) throw error;
+                
+                const list = document.getElementById('profiles-list');
+                list.innerHTML = data.map(profile => `
+                    <div class="glass-effect p-4 rounded-2xl flex justify-between items-center">
+                        <div>
+                            <strong>${profile.name}</strong> (${profile.age}, ${profile.location})
+                            <div class="text-sm text-pink-200">1+ images</div>
+                        </div>
+                        <button onclick="deleteProfileAdmin(${profile.id})" class="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-xl text-sm">
+                            Delete
+                        </button>
+                    </div>
+                `).join('');
+            } catch (error) {
+                console.error('Admin load error:', error);
+            }
+        }
+
+        function checkAdmin() {
+            const password = document.getElementById('admin-password').value;
+            if (password === ADMIN_PASSWORD) {
+                document.getElementById('admin-login').classList.add('hidden');
+                document.getElementById('admin-panel').classList.remove('hidden');
+                loadAdminProfiles();
+            } else {
+                alert('❌ Wrong password!');
+            }
+        }
+
+        async function addProfile() {
+            const imageInput = document.getElementById('profile-images');
+            const name = document.getElementById('profile-name').value.trim();
+            const age = document.getElementById('profile-age').value;
+            const location = document.getElementById('profile-location').value.trim();
+            const occupation = document.getElementById('profile-occupation').value.trim();
+            const gender = document.getElementById('profile-gender').value;
+            const description = document.getElementById('profile-description').value.trim();
+            const partner = document.getElementById('partner-description').value.trim();
+
+            if (!name || !age || !location || !gender || !description || !partner || !imageInput.files?.length) {
+                alert('Please fill all required fields and select at least 1 image (max 5)');
+                return;
+            }
+
+            if (imageInput.files.length > 5) {
+                alert('Maximum 5 images allowed');
+                return;
+            }
+
+            const files = Array.from(imageInput.files);
+            const readImages = [];
+            let loadedCount = 0;
+
+            files.forEach((file, index) => {
+                if (file.size > 10 * 1024 * 1024) {
+                    alert(`Image ${index + 1} (${file.name}) is too large (max 10MB)`);
+                    return;
+                }
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    readImages[index] = e.target.result;
+                    loadedCount++;
+                    if (loadedCount === files.length) {
+                        const profileData = {
+                            name, age: parseInt(age), location, occupation, gender, description, partner,
+                            image_url1: readImages[0] || null,
+                            image_url2: readImages[1] || null,
+                            image_url3: readImages[2] || null,
+                            image_url4: readImages[3] || null,
+                            image_url5: readImages[4] || null
+                        };
+                        
+                        saveProfile(profileData)
+                            .then(() => {
+                                loadAdminProfiles();
+                                clearForm();
+                                alert(`✅ Profile added! Will appear on all devices within 3 seconds.`);
+                            })
+                            .catch(() => alert('❌ Save failed. Check RLS policies.'));
+                    }
+                };
+                reader.readAsDataURL(file);
+            });
+        }
+
+        async function deleteProfileAdmin(id) {
+            if (confirm('Delete this profile?')) {
+                try {
+                    await deleteProfile(id);
+                    loadAdminProfiles();
+                } catch (error) {
+                    alert('Delete failed');
+                }
+            }
+        }
+
+        function clearForm() {
+            ['profile-images', 'profile-name', 'profile-age', 'profile-location', 'profile-occupation', 
+             'profile-gender', 'profile-description', 'partner-description'].forEach(id => {
+                document.getElementById(id).value = '';
+            });
+        }
+
+        // Photo modal functions
         function openPhotoModal(profileId, startIndex = 0) {
             currentProfileId = profileId;
             currentPhotoIndex = Math.max(0, startIndex);
-            const profile = profiles.find(p => p.id === profileId);
-            if (profile && profile.images && profile.images.length > 0) {
-                showCurrentPhoto();
-                document.getElementById('photo-modal').style.display = 'block';
-                document.body.style.overflow = 'hidden';
-            }
+            showCurrentPhoto();
+            document.getElementById('photo-modal').style.display = 'block';
+            document.body.style.overflow = 'hidden';
         }
 
         function closePhotoModal() {
@@ -665,7 +595,7 @@
 
         function showCurrentPhoto() {
             const profile = profiles.find(p => p.id === currentProfileId);
-            if (profile && profile.images && profile.images[currentPhotoIndex]) {
+            if (profile?.images?.[currentPhotoIndex]) {
                 document.getElementById('modal-photo').src = profile.images[currentPhotoIndex];
                 document.getElementById('modal-photo-count').textContent = 
                     `${currentPhotoIndex + 1} / ${profile.images.length}`;
@@ -675,85 +605,43 @@
             }
         }
 
-        function prevPhoto() {
-            if (currentPhotoIndex > 0) {
-                currentPhotoIndex--;
-                showCurrentPhoto();
-            }
-        }
-
-        function nextPhoto() {
+        function prevPhoto() { if (currentPhotoIndex > 0) { currentPhotoIndex--; showCurrentPhoto(); } }
+        function nextPhoto() { 
             const profile = profiles.find(p => p.id === currentProfileId);
-            if (profile && profile.images && currentPhotoIndex < profile.images.length - 1) {
-                currentPhotoIndex++;
-                showCurrentPhoto();
+            if (profile?.images && currentPhotoIndex < profile.images.length - 1) {
+                currentPhotoIndex++; showCurrentPhoto();
             }
         }
 
-        // Event Listeners - FIXED
-        document.addEventListener('DOMContentLoaded', function() {
+        // Event listeners
+        document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('admin-login-btn').addEventListener('click', checkAdmin);
             document.getElementById('add-profile-btn').addEventListener('click', addProfile);
             
-            document.addEventListener('keydown', function(e) {
-                if (e.key === 'Escape') {
-                    closePhotoModal();
-                }
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') closePhotoModal();
             });
 
-            // Initialize with aggressive real-time setup
-            setTimeout(() => {
-                initRealtime();
-                loadProfiles(true); // Force initial fresh load
-            }, 100); // Small delay to ensure Supabase is ready
-        });
-
-        // Cleanup on page unload
-        window.addEventListener('beforeunload', function() {
-            if (realtimeSubscription) {
-                supabaseClient.removeChannel(realtimeSubscription);
-            }
-        });
-
-        // Mobile menu toggle
-        function initMobileMenu() {
-            const btn = document.getElementById('mobile-menu-btn');
-            if (btn) {
-                btn.addEventListener('click', function() {
-                    const navLinks = document.querySelector('nav .flex.space-x-8');
-                    if (navLinks) {
-                        navLinks.classList.toggle('hidden');
-                    }
-                });
-            }
-        }
-
-        // Smooth scroll
-        document.addEventListener('DOMContentLoaded', function() {
+            // Smooth scroll
             document.querySelectorAll('a[href^="#"]').forEach(anchor => {
-                anchor.addEventListener('click', function (e) {
+                anchor.addEventListener('click', (e) => {
                     e.preventDefault();
-                    const target = document.querySelector(this.getAttribute('href'));
-                    if (target) {
-                        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                    }
+                    const target = document.querySelector(anchor.getAttribute('href'));
+                    target?.scrollIntoView({ behavior: 'smooth', block: 'start' });
                 });
             });
-        });
 
-        // Show admin section when clicking admin link
-        document.addEventListener('DOMContentLoaded', function() {
+            // Admin link toggle
             const adminLink = document.querySelector('a[href="#admin"]');
             if (adminLink) {
-                adminLink.addEventListener('click', function(e) {
+                adminLink.addEventListener('click', (e) => {
                     e.preventDefault();
-                    const adminSection = document.getElementById('admin');
-                    if (adminSection) {
-                        adminSection.classList.toggle('hidden');
-                    }
+                    document.getElementById('admin').classList.toggle('hidden');
                 });
             }
-            initMobileMenu();
+
+            // Start polling after page loads
+            setTimeout(startPolling, 500);
         });
     </script>
 </body>
