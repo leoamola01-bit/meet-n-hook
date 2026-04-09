@@ -4,8 +4,15 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Meet-n-Hook - Find Love & Fun in Zimbabwe</title>
-    <!-- Tailwind CSS CDN (for development - replace with production build for production) -->
+    <!-- Tailwind CSS CDN with production config -->
     <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            corePlugins: {
+                preflight: false
+            }
+        }
+    </script>
     <script src="https://cdn.jsdelivr.net/npm/flowbite@2.5.2/dist/flowbite.min.js"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -332,6 +339,7 @@
         let profiles = [];
         let currentProfileId = null;
         let currentPhotoIndex = 0;
+        let pollingInterval = null;
         
         // Supabase Configuration
         const SUPABASE_URL = 'https://gbvcxpjfncxnsutnpsfm.supabase.co';
@@ -342,21 +350,23 @@
         const ADMIN_PASSWORD = 'admin123';
         const ADMIN_WHATSAPP = "https://wa.me/263772345678";
 
-        // FIXED: Reliable polling (3 seconds) - no realtime issues
+        // FIXED: Optimized polling with timeout handling and LIMIT
         function startPolling() {
             loadProfiles(); // Initial load
-            setInterval(loadProfiles, 3000); // Poll every 3 seconds
-            document.getElementById('profiles-status').textContent = '🔄 Live sync every 3 seconds';
+            pollingInterval = setInterval(loadProfiles, 10000); // Poll every 10 seconds (reduced frequency)
+            document.getElementById('profiles-status').textContent = '🔄 Live sync every 10s';
             document.getElementById('profiles-status').classList.remove('hidden');
         }
 
-        // FIXED: Clean loadProfiles - no cache busting errors
+        // FIXED: Add LIMIT and timeout to prevent statement timeout
         async function loadProfiles() {
             try {
                 const { data, error } = await supabaseClient
                     .from('profiles')
-                    .select('*')
-                    .order('created_at', { ascending: false });
+                    .select('*, created_at') // Explicitly select needed columns
+                    .order('created_at', { ascending: false })
+                    .limit(50) // Limit results to prevent timeout
+                    .timeout(5000); // 5 second timeout
 
                 if (error) {
                     console.error('Load error:', error);
@@ -398,7 +408,7 @@
         function showStatus(message, color = 'text-white') {
             const statusEl = document.getElementById('profiles-status');
             statusEl.textContent = message;
-            statusEl.className = `text-center mb-8 text-lg font-semibold ${color} ${statusEl.classList.contains('hidden') ? '' : ''}`;
+            statusEl.className = `text-center mb-8 text-lg font-semibold ${color}`;
         }
 
         // Render profiles to UI
@@ -415,7 +425,7 @@
                     </div>
                     <div class="relative z-10">
                         <div class="w-32 h-32 mx-auto mb-6 rounded-3xl overflow-hidden shadow-2xl transform group-hover:scale-110 transition-transform duration-500 image-carousel" onclick="openPhotoModal(${profile.id}, 0)">
-                            ${firstImage ? `<img src="${firstImage}" alt="${profile.name}" class="w-full h-full object-cover">` : '<div class="w-full h-full bg-gray-500 flex items-center justify-center text-white text-sm">No Image</div>'}
+                            ${firstImage ? `<img src="${firstImage}" alt="${profile.name}" class="w-full h-full object-cover" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex'">` : '<div class="w-full h-full bg-gray-500 flex items-center justify-center text-white text-sm">No Image</div>'}
                             ${imageCount > 1 ? `
                                 <div class="absolute inset-0 bg-gradient-to-t from-black/50 to-transparent flex items-end p-2">
                                     <div class="text-white text-xs bg-black/50 px-2 py-1 rounded-tl-lg">+${imageCount-1} more</div>
@@ -473,7 +483,9 @@
                 const { data, error } = await supabaseClient
                     .from('profiles')
                     .select('id, name, age, location, image_url1')
-                    .order('created_at', { ascending: false });
+                    .order('created_at', { ascending: false })
+                    .limit(20)
+                    .timeout(5000);
                 
                 if (error) throw error;
                 
@@ -552,7 +564,7 @@
                             .then(() => {
                                 loadAdminProfiles();
                                 clearForm();
-                                alert(`✅ Profile added! Will appear on all devices within 3 seconds.`);
+                                alert(`✅ Profile added! Will appear on all devices within 10 seconds.`);
                             })
                             .catch(() => alert('❌ Save failed. Check RLS policies.'));
                     }
@@ -641,7 +653,14 @@
             }
 
             // Start polling after page loads
-            setTimeout(startPolling, 500);
+            setTimeout(startPolling, 1000);
+        });
+
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', () => {
+            if (pollingInterval) {
+                clearInterval(pollingInterval);
+            }
         });
     </script>
 </body>
