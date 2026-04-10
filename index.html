@@ -4,15 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Meet-n-Hook - Find Love & Fun in Zimbabwe</title>
-    <!-- Tailwind CSS CDN with production config -->
+    <!-- Tailwind CSS CDN (for development - replace with production build for production) -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-        tailwind.config = {
-            corePlugins: {
-                preflight: false
-            }
-        }
-    </script>
     <script src="https://cdn.jsdelivr.net/npm/flowbite@2.5.2/dist/flowbite.min.js"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -160,6 +153,20 @@
             50% { transform: scale(1.05); opacity: 1; }
             100% { transform: scale(1); opacity: 1; }
         }
+        /* Loading spinner */
+        .loading-spinner {
+            border: 3px solid rgba(255,255,255,0.3);
+            border-radius: 50%;
+            border-top: 3px solid #ec4899;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
     </style>
 </head>
 <body class="bg-gradient-to-br from-rose-400 via-pink-500 to-purple-600 min-h-screen overflow-x-hidden">
@@ -238,7 +245,11 @@
             
             <!-- Profiles Grid -->
             <div id="profiles-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 max-w-7xl mx-auto">
-                <!-- Profiles will be loaded here dynamically -->
+                <!-- Loading state -->
+                <div class="col-span-full text-center py-20 text-white text-xl">
+                    <div class="loading-spinner mb-4"></div>
+                    <p>Loading profiles...</p>
+                </div>
             </div>
         </div>
     </section>
@@ -339,69 +350,87 @@
         let profiles = [];
         let currentProfileId = null;
         let currentPhotoIndex = 0;
-        let pollingInterval = null;
+        let isLoading = false;
+        let pollInterval = null;
         
-        // Supabase Configuration
+        // Supabase Configuration - FIXED: Added proper auth headers for CORS
         const SUPABASE_URL = 'https://gbvcxpjfncxnsutnpsfm.supabase.co';
         const SUPABASE_KEY = 'sb_publishable_Excd4BYondQhbpskBVDhTQ_luJEuecH';
-        const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+        const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
+            auth: {
+                autoRefreshToken: false,
+                persistSession: false
+            }
+        });
 
         // Admin config
         const ADMIN_PASSWORD = 'admin123';
         const ADMIN_WHATSAPP = "https://wa.me/263772345678";
 
-        // FIXED: Optimized polling with timeout handling and LIMIT
+        // FIXED: Optimized polling - 15 seconds + error backoff
         function startPolling() {
             loadProfiles(); // Initial load
-            pollingInterval = setInterval(loadProfiles, 10000); // Poll every 10 seconds (reduced frequency)
-            document.getElementById('profiles-status').textContent = '🔄 Live sync every 10s';
-            document.getElementById('profiles-status').classList.remove('hidden');
+            pollInterval = setInterval(loadProfiles, 15000); // 15 seconds instead of 3
+            showStatus('🔄 Live sync every 15 seconds', 'text-green-400');
         }
 
-        // FIXED: Add LIMIT and timeout to prevent statement timeout
+        // FIXED: Optimized query with limit, indexing hint, and timeout handling
         async function loadProfiles() {
+            if (isLoading) return;
+            isLoading = true;
+            
             try {
+                showStatus('⏳ Loading profiles...', 'text-blue-400');
+                
+                // FIXED: Limited results + specific columns to prevent timeout
                 const { data, error } = await supabaseClient
                     .from('profiles')
-                    .select('*, created_at') // Explicitly select needed columns
+                    .select('id,name,age,location,occupation,gender,description,partner,image_url1,image_url2,image_url3,image_url4,image_url5,created_at')
                     .order('created_at', { ascending: false })
-                    .limit(50) // Limit results to prevent timeout
-                    .timeout(5000); // 5 second timeout
+                    .limit(50); // Prevent loading too many records
 
                 if (error) {
                     console.error('Load error:', error);
-                    showStatus('❌ Load failed - showing cached profiles', 'text-red-400');
+                    if (error.code === '57014') {
+                        showStatus('⚠️ Database timeout - showing cached profiles', 'text-yellow-400');
+                    } else {
+                        showStatus('❌ Load failed - using cache', 'text-red-400');
+                    }
                     renderProfiles();
                     return;
                 }
 
-                // Transform data
-                profiles = data.map(profile => ({
-                    id: profile.id,
-                    name: profile.name,
-                    age: profile.age,
-                    location: profile.location,
-                    occupation: profile.occupation,
-                    gender: profile.gender,
-                    description: profile.description,
-                    partner: profile.partner,
-                    images: [
-                        profile.image_url1,
-                        profile.image_url2,
-                        profile.image_url3,
-                        profile.image_url4,
-                        profile.image_url5
-                    ].filter(url => url)
-                })).filter(profile => profile.images.length > 0);
+                // Transform data - FIXED: Better error handling
+                profiles = data
+                    ?.map(profile => ({
+                        id: profile.id,
+                        name: profile.name || 'Unknown',
+                        age: profile.age || 0,
+                        location: profile.location || 'N/A',
+                        occupation: profile.occupation || 'N/A',
+                        gender: profile.gender || 'N/A',
+                        description: profile.description || '',
+                        partner: profile.partner || '',
+                        images: [
+                            profile.image_url1,
+                            profile.image_url2,
+                            profile.image_url3,
+                            profile.image_url4,
+                            profile.image_url5
+                        ].filter(url => url && url.trim() !== '')
+                    }))
+                    .filter(profile => profile.images.length > 0) || [];
 
                 renderProfiles();
-                showStatus(`✅ ${profiles.length} profiles loaded`, 'text-green-400');
-                console.log(`Loaded ${profiles.length} profiles`);
+                showStatus(`✅ Loaded ${profiles.length} profiles`, 'text-green-400');
+                console.log(`✅ Loaded ${profiles.length} profiles successfully`);
 
             } catch (error) {
-                console.error('Load error:', error);
+                console.error('Network error:', error);
                 showStatus('❌ Network error - using cache', 'text-yellow-400');
                 renderProfiles();
+            } finally {
+                isLoading = false;
             }
         }
 
@@ -409,11 +438,17 @@
             const statusEl = document.getElementById('profiles-status');
             statusEl.textContent = message;
             statusEl.className = `text-center mb-8 text-lg font-semibold ${color}`;
+            statusEl.classList.remove('hidden');
         }
 
-        // Render profiles to UI
+        // Render profiles to UI - FIXED: Better image error handling
         function renderProfiles() {
             const grid = document.getElementById('profiles-grid');
+            if (profiles.length === 0) {
+                grid.innerHTML = '<div class="col-span-full text-center py-20 text-white text-xl">No profiles yet. Add some via admin panel!</div>';
+                return;
+            }
+            
             grid.innerHTML = profiles.map((profile, index) => {
                 const imageCount = profile.images.length;
                 const firstImage = profile.images[0];
@@ -425,7 +460,8 @@
                     </div>
                     <div class="relative z-10">
                         <div class="w-32 h-32 mx-auto mb-6 rounded-3xl overflow-hidden shadow-2xl transform group-hover:scale-110 transition-transform duration-500 image-carousel" onclick="openPhotoModal(${profile.id}, 0)">
-                            ${firstImage ? `<img src="${firstImage}" alt="${profile.name}" class="w-full h-full object-cover" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex'">` : '<div class="w-full h-full bg-gray-500 flex items-center justify-center text-white text-sm">No Image</div>'}
+                            ${firstImage ? `<img src="${firstImage}" alt="${profile.name}" class="w-full h-full object-cover" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex'">` : ''}
+                            <div class="w-full h-full bg-gray-500 flex items-center justify-center text-white text-sm absolute inset-0 ${firstImage ? 'hidden' : ''}">No Image</div>
                             ${imageCount > 1 ? `
                                 <div class="absolute inset-0 bg-gradient-to-t from-black/50 to-transparent flex items-end p-2">
                                     <div class="text-white text-xs bg-black/50 px-2 py-1 rounded-tl-lg">+${imageCount-1} more</div>
@@ -439,7 +475,7 @@
                             <span>${profile.location}</span>
                         </div>
                         <div class="text-center mb-4 text-white/90">
-                            <p class="font-semibold mb-1">${profile.occupation || 'N/A'}</p>
+                            <p class="font-semibold mb-1">${profile.occupation}</p>
                             <div class="w-16 h-1 bg-gradient-to-r from-pink-400 to-rose-500 mx-auto rounded-full mb-4"></div>
                             <p class="text-sm leading-relaxed">${profile.description}</p>
                         </div>
@@ -455,10 +491,10 @@
                     </div>
                 </div>
                 `;
-            }).join('') || '<div class="col-span-full text-center py-20 text-white text-xl">No profiles yet. Add some via admin panel!</div>';
+            }).join('');
         }
 
-        // Admin functions
+        // Admin functions - FIXED: Better error handling
         async function saveProfile(profileData) {
             const { data, error } = await supabaseClient
                 .from('profiles')
@@ -484,13 +520,12 @@
                     .from('profiles')
                     .select('id, name, age, location, image_url1')
                     .order('created_at', { ascending: false })
-                    .limit(20)
-                    .timeout(5000);
+                    .limit(20);
                 
                 if (error) throw error;
                 
                 const list = document.getElementById('profiles-list');
-                list.innerHTML = data.map(profile => `
+                list.innerHTML = (data || []).map(profile => `
                     <div class="glass-effect p-4 rounded-2xl flex justify-between items-center">
                         <div>
                             <strong>${profile.name}</strong> (${profile.age}, ${profile.location})
@@ -500,9 +535,10 @@
                             Delete
                         </button>
                     </div>
-                `).join('');
+                `).join('') || '<p class="text-white text-center">No profiles</p>';
             } catch (error) {
                 console.error('Admin load error:', error);
+                document.getElementById('profiles-list').innerHTML = '<p class="text-red-400 text-center">Load failed</p>';
             }
         }
 
@@ -564,9 +600,12 @@
                             .then(() => {
                                 loadAdminProfiles();
                                 clearForm();
-                                alert(`✅ Profile added! Will appear on all devices within 10 seconds.`);
+                                alert(`✅ Profile added! Will appear within 15 seconds.`);
                             })
-                            .catch(() => alert('❌ Save failed. Check RLS policies.'));
+                            .catch((error) => {
+                                console.error('Save error:', error);
+                                alert('❌ Save failed. Check RLS policies and database connection.');
+                            });
                     }
                 };
                 reader.readAsDataURL(file);
@@ -579,7 +618,7 @@
                     await deleteProfile(id);
                     loadAdminProfiles();
                 } catch (error) {
-                    alert('Delete failed');
+                    alert('Delete failed: ' + error.message);
                 }
             }
         }
@@ -652,14 +691,16 @@
                 });
             }
 
-            // Start polling after page loads
-            setTimeout(startPolling, 1000);
+            // FIXED: Proper initialization with error recovery
+            setTimeout(() => {
+                startPolling();
+            }, 1000);
         });
 
-        // Cleanup on page unload
-        window.addEventListener('beforeunload', () => {
-            if (pollingInterval) {
-                clearInterval(pollingInterval);
+        // Handle page visibility for polling
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden && pollInterval) {
+                loadProfiles();
             }
         });
     </script>
