@@ -505,6 +505,38 @@
             return data;
         }
 
+        async function uploadProfileImages(files) {
+            const uploadedUrls = [];
+
+            for (let i = 0; i < files.length; i++) {
+                const file = files[i];
+                const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+                const filePath = `profiles/${Date.now()}-${i}-${safeName}`;
+
+                const { error: uploadError } = await supabaseClient
+                    .storage
+                    .from('images')
+                    .upload(filePath, file);
+
+                if (uploadError) {
+                    throw uploadError;
+                }
+
+                const { data: publicUrlData, error: publicUrlError } = supabaseClient
+                    .storage
+                    .from('images')
+                    .getPublicUrl(filePath);
+
+                if (publicUrlError) {
+                    throw publicUrlError;
+                }
+
+                uploadedUrls.push(publicUrlData.publicUrl);
+            }
+
+            return uploadedUrls;
+        }
+
         async function deleteProfile(id) {
             const { error } = await supabaseClient
                 .from('profiles')
@@ -574,42 +606,39 @@
             }
 
             const files = Array.from(imageInput.files);
-            const readImages = [];
-            let loadedCount = 0;
 
-            files.forEach((file, index) => {
-                if (file.size > 10 * 1024 * 1024) {
-                    alert(`Image ${index + 1} (${file.name}) is too large (max 10MB)`);
+            for (let index = 0; index < files.length; index++) {
+                if (files[index].size > 10 * 1024 * 1024) {
+                    alert(`Image ${index + 1} (${files[index].name}) is too large (max 10MB)`);
                     return;
                 }
-                const reader = new FileReader();
-                reader.onload = (e) => {
-                    readImages[index] = e.target.result;
-                    loadedCount++;
-                    if (loadedCount === files.length) {
-                        const profileData = {
-                            name, age: parseInt(age), location, occupation, gender, description, partner,
-                            image_url1: readImages[0] || null,
-                            image_url2: readImages[1] || null,
-                            image_url3: readImages[2] || null,
-                            image_url4: readImages[3] || null,
-                            image_url5: readImages[4] || null
-                        };
-                        
-                        saveProfile(profileData)
-                            .then(() => {
-                                loadAdminProfiles();
-                                clearForm();
-                                alert(`✅ Profile added! Will appear within 15 seconds.`);
-                            })
-                            .catch((error) => {
-                                console.error('Save error:', error);
-                                alert('❌ Save failed. Check RLS policies and database connection.');
-                            });
-                    }
+            }
+
+            try {
+                const uploadedUrls = await uploadProfileImages(files);
+                const profileData = {
+                    name,
+                    age: parseInt(age, 10),
+                    location,
+                    occupation,
+                    gender,
+                    description,
+                    partner,
+                    image_url1: uploadedUrls[0] || null,
+                    image_url2: uploadedUrls[1] || null,
+                    image_url3: uploadedUrls[2] || null,
+                    image_url4: uploadedUrls[3] || null,
+                    image_url5: uploadedUrls[4] || null
                 };
-                reader.readAsDataURL(file);
-            });
+
+                await saveProfile(profileData);
+                loadAdminProfiles();
+                clearForm();
+                alert('✅ Profile added! Will appear within 15 seconds.');
+            } catch (error) {
+                console.error('Save error:', error);
+                alert('❌ Save failed. Check storage permissions, RLS policies, and database connection.');
+            }
         }
 
         async function deleteProfileAdmin(id) {
