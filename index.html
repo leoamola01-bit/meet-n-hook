@@ -354,9 +354,10 @@
         <div class="photo-modal-content" onclick="event.stopPropagation()">
             <span class="close-modal" onclick="closePhotoModal()">&times;</span>
             <div class="nav-arrow prev-arrow" onclick="prevPhoto()" id="prev-arrow">&#8249;</div>
-            <img id="modal-photo" src="" alt="Profile Photo">
+            <img id="modal-photo" src="" alt="Profile Photo" onerror="handleModalImageError()">
             <div class="nav-arrow next-arrow" onclick="nextPhoto()" id="next-arrow">&#8250;</div>
             <div class="text-white text-center mt-4 text-lg font-semibold" id="modal-photo-count"></div>
+            <div id="modal-photo-error" class="text-red-300 text-center mt-4 hidden"></div>
         </div>
     </div>
 
@@ -476,23 +477,35 @@
 
                 // Transform data - FIXED: Better error handling
                 profiles = data
-                    ?.map(profile => ({
-                        id: profile.id,
-                        name: profile.name || 'Unknown',
-                        age: profile.age || 0,
-                        location: profile.location || 'N/A',
-                        occupation: profile.occupation || 'N/A',
-                        gender: profile.gender || 'N/A',
-                        description: profile.description || '',
-                        partner: profile.partner || '',
-                        images: [
+                    ?.map(profile => {
+                        const rawImages = [
                             profile.image_url1,
                             profile.image_url2,
                             profile.image_url3,
                             profile.image_url4,
                             profile.image_url5
-                        ].filter(url => url && url.trim() !== '')
-                    }))
+                        ];
+                        
+                        const filteredImages = rawImages
+                            .filter(url => url && url.trim() !== '' && url !== 'null' && url !== 'undefined')
+                            .map(url => url.trim());
+                        
+                        const profileId = typeof profile.id === 'string' && /^\d+$/.test(profile.id)
+                            ? Number(profile.id)
+                            : profile.id;
+                        
+                        return {
+                            id: profileId,
+                            name: profile.name || 'Unknown',
+                            age: profile.age || 0,
+                            location: profile.location || 'N/A',
+                            occupation: profile.occupation || 'N/A',
+                            gender: profile.gender || 'N/A',
+                            description: profile.description || '',
+                            partner: profile.partner || '',
+                            images: filteredImages
+                        };
+                    })
                     .filter(profile => profile.images.length > 0) || [];
 
                 renderProfiles();
@@ -608,7 +621,12 @@
                 .insert([profileData])
                 .select()
                 .single();
-            if (error) throw error;
+            
+            if (error) {
+                console.error('Save profile error:', error);
+                throw error;
+            }
+            
             return data;
         }
 
@@ -638,10 +656,12 @@
                     .getPublicUrl(filePath);
 
                 if (publicUrlError) {
+                    console.error('Error getting public URL:', publicUrlError);
                     throw publicUrlError;
                 }
 
-                uploadedUrls.push(publicUrlData.publicUrl);
+                const publicUrl = publicUrlData.publicUrl;
+                uploadedUrls.push(publicUrl);
             }
 
             return uploadedUrls;
@@ -841,6 +861,7 @@
                 }
 
                 const uploadedUrls = await uploadProfileImages(files);
+                
                 const profileData = {
                     name,
                     age: parseInt(age, 10),
@@ -898,8 +919,26 @@
 
         // Photo modal functions
         function openPhotoModal(profileId, startIndex = 0) {
-            currentProfileId = profileId;
+            // Convert profileId to number to match the profiles array
+            const numericId = typeof profileId === 'string' ? parseInt(profileId, 10) : profileId;
+            const profile = profiles.find(p => p.id === numericId);
+            
+            if (!profile || !profile.images || profile.images.length === 0) {
+                alert('This profile has no available photos to display.');
+                return;
+            }
+
+            // Preload modal images so next/prev transitions are instant
+            profile.images.forEach(url => {
+                if (url) {
+                    const img = new Image();
+                    img.src = url;
+                }
+            });
+
+            currentProfileId = numericId;
             currentPhotoIndex = Math.max(0, startIndex);
+            document.getElementById('modal-photo-error').classList.add('hidden');
             showCurrentPhoto();
             document.getElementById('photo-modal').style.display = 'block';
             document.body.style.overflow = 'hidden';
@@ -908,25 +947,56 @@
         function closePhotoModal() {
             document.getElementById('photo-modal').style.display = 'none';
             document.body.style.overflow = 'auto';
+            document.getElementById('modal-photo').src = '';
+            document.getElementById('modal-photo-error').classList.add('hidden');
         }
 
         function showCurrentPhoto() {
             const profile = profiles.find(p => p.id === currentProfileId);
-            if (profile?.images?.[currentPhotoIndex]) {
-                document.getElementById('modal-photo').src = profile.images[currentPhotoIndex];
-                document.getElementById('modal-photo-count').textContent = 
-                    `${currentPhotoIndex + 1} / ${profile.images.length}`;
-                
-                document.getElementById('prev-arrow').style.display = currentPhotoIndex > 0 ? 'flex' : 'none';
-                document.getElementById('next-arrow').style.display = currentPhotoIndex < profile.images.length - 1 ? 'flex' : 'none';
+            const photoEl = document.getElementById('modal-photo');
+            const countEl = document.getElementById('modal-photo-count');
+            const errorEl = document.getElementById('modal-photo-error');
+            const currentImage = profile?.images?.[currentPhotoIndex];
+
+            console.log('showCurrentPhoto', {
+                currentProfileId,
+                currentPhotoIndex,
+                imageCount: profile?.images?.length,
+                currentImage
+            });
+
+            if (currentImage) {
+                photoEl.src = currentImage;
+                countEl.textContent = `${currentPhotoIndex + 1} / ${profile.images.length}`;
+                errorEl.classList.add('hidden');
+                photoEl.style.display = 'block';
+            } else {
+                photoEl.src = '';
+                photoEl.style.display = 'none';
+                countEl.textContent = '';
+                errorEl.textContent = 'Unable to load photo. Please try again later.';
+                errorEl.classList.remove('hidden');
             }
+
+            document.getElementById('prev-arrow').style.display = currentPhotoIndex > 0 ? 'flex' : 'none';
+            document.getElementById('next-arrow').style.display = profile?.images && currentPhotoIndex < profile.images.length - 1 ? 'flex' : 'none';
+        }
+
+        function handleModalImageError() {
+            const photoEl = document.getElementById('modal-photo');
+            const errorEl = document.getElementById('modal-photo-error');
+            photoEl.style.display = 'none';
+            errorEl.textContent = 'Failed to load image. The file may be unavailable.';
+            errorEl.classList.remove('hidden');
         }
 
         function prevPhoto() { if (currentPhotoIndex > 0) { currentPhotoIndex--; showCurrentPhoto(); } }
         function nextPhoto() { 
             const profile = profiles.find(p => p.id === currentProfileId);
+            console.log('nextPhoto', { currentProfileId, currentPhotoIndex, imageCount: profile?.images?.length });
             if (profile?.images && currentPhotoIndex < profile.images.length - 1) {
-                currentPhotoIndex++; showCurrentPhoto();
+                currentPhotoIndex++;
+                showCurrentPhoto();
             }
         }
 
