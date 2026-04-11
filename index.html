@@ -168,6 +168,11 @@
             100% { transform: rotate(360deg); }
         }
     </style>
+    <!-- Inject service key for admin operations (replace with your actual service key) -->
+    <script>
+        // WARNING: Only use this for development/testing. In production, use server-side admin operations
+        // window.SUPABASE_SERVICE_KEY = 'your_service_key_here';
+    </script>
 </head>
 <body class="bg-gradient-to-br from-rose-400 via-pink-500 to-purple-600 min-h-screen overflow-x-hidden">
     <!-- Floating Hearts -->
@@ -183,14 +188,19 @@
             <div class="text-2xl font-bold bg-gradient-to-r from-white to-gray-200 bg-clip-text text-transparent">
                 💕 Meet-n-Hook
             </div>
-            <div class="hidden md:flex space-x-8">
-                <a href="#profiles" class="text-white hover:text-pink-200 transition-all duration-300">Profiles</a>
-                <a href="#rules" class="text-white hover:text-pink-200 transition-all duration-300">Rules</a>
-                <a href="#admin" class="text-white hover:text-pink-200 transition-all duration-300">Admin</a>
+            <div class="flex items-center gap-4">
+                <div id="connection-status" class="hidden text-sm px-3 py-1 rounded-full bg-green-500/20 text-green-300 border border-green-500/30">
+                    <i class="fas fa-wifi mr-1"></i>Online
+                </div>
+                <div class="hidden md:flex space-x-8">
+                    <a href="#profiles" class="text-white hover:text-pink-200 transition-all duration-300">Profiles</a>
+                    <a href="#rules" class="text-white hover:text-pink-200 transition-all duration-300">Rules</a>
+                    <a href="#admin" class="text-white hover:text-pink-200 transition-all duration-300">Admin</a>
+                </div>
+                <button id="mobile-menu-btn" class="md:hidden text-white">
+                    <i class="fas fa-bars text-xl"></i>
+                </button>
             </div>
-            <button id="mobile-menu-btn" class="md:hidden text-white">
-                <i class="fas fa-bars text-xl"></i>
-            </button>
         </div>
     </nav>
 
@@ -250,6 +260,13 @@
                     <div class="loading-spinner mb-4"></div>
                     <p>Loading profiles...</p>
                 </div>
+            </div>
+            
+            <!-- Retry button for failed loads -->
+            <div id="retry-section" class="text-center mt-8 hidden">
+                <button id="retry-btn" class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 px-8 rounded-2xl text-lg shadow-xl">
+                    🔄 Retry Loading Profiles
+                </button>
             </div>
         </div>
     </section>
@@ -359,15 +376,35 @@
         let isLoading = false;
         let pollInterval = null;
         
-        // Supabase Configuration - FIXED: Added proper auth headers for CORS
+        // Supabase Configuration - FIXED: Added proper auth headers for CORS and timeout handling
         const SUPABASE_URL = 'https://gbvcxpjfncxnsutnpsfm.supabase.co';
         const SUPABASE_KEY = 'sb_publishable_Excd4BYondQhbpskBVDhTQ_luJEuecH';
+        const SUPABASE_SERVICE_KEY = window.SUPABASE_SERVICE_KEY || null; // Try to get service key from global
+
         const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
             auth: {
                 autoRefreshToken: false,
                 persistSession: true
+            },
+            global: {
+                headers: {
+                    'Cache-Control': 'no-cache'
+                }
             }
         });
+
+        // Admin client with service key for operations requiring elevated permissions
+        const supabaseAdminClient = SUPABASE_SERVICE_KEY ? supabase.createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
+            auth: {
+                autoRefreshToken: false,
+                persistSession: false
+            },
+            global: {
+                headers: {
+                    'Cache-Control': 'no-cache'
+                }
+            }
+        }) : supabaseClient;
 
         // Admin config
         const ADMIN_PASSWORD = 'admin123';
@@ -378,15 +415,46 @@
             loadProfiles(); // Initial load
             pollInterval = setInterval(loadProfiles, 15000); // 15 seconds instead of 3
             showStatus('🔄 Live sync every 15 seconds', 'text-green-400');
+            
+            // Check connection status every 60 seconds (reduced frequency)
+            setInterval(checkConnectivity, 60000);
+        }
+
+        async function checkConnectivity() {
+            try {
+                // Simple connectivity check to Supabase - faster timeout
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
+                
+                const response = await fetch(`${SUPABASE_URL}/rest/v1/`, {
+                    method: 'HEAD',
+                    headers: {
+                        'apikey': SUPABASE_KEY
+                    },
+                    signal: controller.signal
+                });
+                
+                clearTimeout(timeoutId);
+                updateConnectionStatus(response.ok);
+            } catch (error) {
+                updateConnectionStatus(false);
+            }
         }
 
         // FIXED: Optimized query with limit, indexing hint, and timeout handling
-        async function loadProfiles() {
+        async function loadProfiles(retryCount = 0) {
             if (isLoading) return;
             isLoading = true;
             
+            const maxRetries = 1; // Reduced from 3 to 1
+            const retryDelay = 1000; // Reduced from 3000ms to 1000ms
+            
             try {
-                showStatus('⏳ Loading profiles...', 'text-blue-400');
+                if (retryCount === 0) {
+                    showStatus('⏳ Loading profiles...', 'text-blue-400');
+                } else {
+                    showStatus(`🔄 Retrying... (${retryCount}/${maxRetries})`, 'text-yellow-400');
+                }
                 
                 // FIXED: Limited results + specific columns to prevent timeout
                 const { data, error } = await supabaseClient
@@ -433,8 +501,17 @@
 
             } catch (error) {
                 console.error('Network error:', error);
-                showStatus('❌ Network error - using cache', 'text-yellow-400');
-                renderProfiles();
+                
+                // Only retry on specific network errors, not all errors
+                const shouldRetry = error.name === 'TypeError' || error.message.includes('fetch') || error.message.includes('network') || error.message.includes('Failed to fetch');
+                
+                if (shouldRetry && retryCount < maxRetries) {
+                    console.log(`Retrying profiles load in ${retryDelay}ms... (${retryCount + 1}/${maxRetries})`);
+                    setTimeout(() => loadProfiles(retryCount + 1), retryDelay);
+                } else {
+                    showStatus('❌ Network error - check connection', 'text-red-400');
+                    renderProfiles();
+                }
             } finally {
                 isLoading = false;
             }
@@ -442,9 +519,33 @@
 
         function showStatus(message, color = 'text-white') {
             const statusEl = document.getElementById('profiles-status');
+            const retrySection = document.getElementById('retry-section');
+            
             statusEl.textContent = message;
             statusEl.className = `text-center mb-8 text-lg font-semibold ${color}`;
             statusEl.classList.remove('hidden');
+            
+            // Show retry button for network errors
+            if (message.includes('Network error') || message.includes('❌')) {
+                retrySection.classList.remove('hidden');
+                updateConnectionStatus(false);
+            } else {
+                retrySection.classList.add('hidden');
+                updateConnectionStatus(true);
+            }
+        }
+
+        function updateConnectionStatus(isOnline) {
+            const statusEl = document.getElementById('connection-status');
+            if (isOnline) {
+                statusEl.className = 'text-sm px-3 py-1 rounded-full bg-green-500/20 text-green-300 border border-green-500/30';
+                statusEl.innerHTML = '<i class="fas fa-wifi mr-1"></i>Online';
+                statusEl.classList.remove('hidden');
+            } else {
+                statusEl.className = 'text-sm px-3 py-1 rounded-full bg-red-500/20 text-red-300 border border-red-500/30';
+                statusEl.innerHTML = '<i class="fas fa-exclamation-triangle mr-1"></i>Offline';
+                statusEl.classList.remove('hidden');
+            }
         }
 
         // Render profiles to UI - FIXED: Better image error handling
@@ -465,7 +566,7 @@
                         ${imageCount} Photos • Verified
                     </div>
                     <div class="relative z-10">
-                        <div class="w-32 h-32 mx-auto mb-6 rounded-3xl overflow-hidden shadow-2xl transform group-hover:scale-110 transition-transform duration-500 image-carousel" onclick="openPhotoModal(${profile.id}, 0)">
+                        <div class="w-32 h-32 mx-auto mb-6 rounded-3xl overflow-hidden shadow-2xl transform group-hover:scale-110 transition-transform duration-500 image-carousel" onclick="openPhotoModal('${profile.id}', 0)">
                             ${firstImage ? `<img src="${firstImage}" alt="${profile.name}" class="w-full h-full object-cover" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex'">` : ''}
                             <div class="w-full h-full bg-gray-500 flex items-center justify-center text-white text-sm absolute inset-0 ${firstImage ? 'hidden' : ''}">No Image</div>
                             ${imageCount > 1 ? `
@@ -547,15 +648,37 @@
         }
 
         async function deleteProfile(id) {
-            const { error } = await supabaseClient
-                .from('profiles')
-                .delete()
-                .eq('id', id);
-            if (error) throw error;
-            return true;
+            console.log('Attempting to delete profile with ID:', id);
+
+            // Use server-side API for secure delete operations
+            const response = await fetch(`http://localhost:3001/api/profiles/${id}`, {
+                method: 'DELETE',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error || 'Delete failed');
+            }
+
+            const result = await response.json();
+            console.log('Delete successful:', result);
+            return result;
         }
 
-        async function loadAdminProfiles() {
+        async function loadAdminProfiles(retryCount = 0) {
+            const list = document.getElementById('profiles-list');
+            const maxRetries = 1; // Reduced from 3 to 1
+            const retryDelay = 1000; // Reduced from 2000ms to 1000ms
+
+            if (retryCount === 0) {
+                list.innerHTML = '<p class="text-white text-center py-8">Loading admin profiles...</p>';
+            } else {
+                list.innerHTML = `<p class="text-yellow-400 text-center py-8">Retrying... (${retryCount}/${maxRetries})</p>`;
+            }
+
             try {
                 const { data, error } = await supabaseClient
                     .from('profiles')
@@ -565,21 +688,40 @@
                 
                 if (error) throw error;
                 
-                const list = document.getElementById('profiles-list');
                 list.innerHTML = (data || []).map(profile => `
                     <div class="glass-effect p-4 rounded-2xl flex justify-between items-center">
                         <div>
                             <strong>${profile.name}</strong> (${profile.age}, ${profile.location})
                             <div class="text-sm text-pink-200">1+ images</div>
                         </div>
-                        <button onclick="deleteProfileAdmin(${profile.id})" class="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-xl text-sm">
+                        <button onclick="deleteProfileAdmin('${profile.id}', this)" class="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-xl text-sm">
                             Delete
                         </button>
                     </div>
                 `).join('') || '<p class="text-white text-center">No profiles</p>';
+                
+                updateConnectionStatus(true);
             } catch (error) {
                 console.error('Admin load error:', error);
-                document.getElementById('profiles-list').innerHTML = '<p class="text-red-400 text-center">Load failed</p>';
+                
+                // Only retry on specific network errors
+                const shouldRetry = error.name === 'TypeError' || error.message.includes('fetch') || error.message.includes('network') || error.message.includes('Failed to fetch');
+                
+                if (shouldRetry && retryCount < maxRetries) {
+                    console.log(`Retrying admin profiles load in ${retryDelay}ms... (${retryCount + 1}/${maxRetries})`);
+                    setTimeout(() => loadAdminProfiles(retryCount + 1), retryDelay);
+                } else {
+                    list.innerHTML = `
+                        <div class="text-center py-8">
+                            <p class="text-red-400 mb-4">❌ Failed to load profiles</p>
+                            <p class="text-sm text-gray-300 mb-4">Check your internet connection and try again</p>
+                            <button onclick="loadAdminProfiles()" class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-xl text-sm">
+                                🔄 Retry
+                            </button>
+                        </div>
+                    `;
+                    updateConnectionStatus(false);
+                }
             }
         }
 
@@ -587,6 +729,8 @@
             const email = document.getElementById('admin-email').value.trim();
             const password = document.getElementById('admin-password').value;
             const errorEl = document.getElementById('admin-login-error');
+            const signInBtn = document.getElementById('admin-login-btn');
+            const originalText = signInBtn.textContent;
 
             errorEl.classList.add('hidden');
             errorEl.textContent = '';
@@ -597,20 +741,28 @@
                 return;
             }
 
-            const { data, error } = await supabaseClient.auth.signInWithPassword({
-                email,
-                password
-            });
+            signInBtn.disabled = true;
+            signInBtn.textContent = 'Signing in...';
 
-            if (error) {
-                errorEl.textContent = error.message;
-                errorEl.classList.remove('hidden');
-                console.error('Sign in failed:', error);
-                return;
-            }
+            try {
+                const { data, error } = await supabaseClient.auth.signInWithPassword({
+                    email,
+                    password
+                });
 
-            if (data?.session) {
-                showAdminPanel();
+                if (error) {
+                    errorEl.textContent = error.message;
+                    errorEl.classList.remove('hidden');
+                    console.error('Sign in failed:', error);
+                    return;
+                }
+
+                if (data?.session) {
+                    showAdminPanel();
+                }
+            } finally {
+                signInBtn.disabled = false;
+                signInBtn.textContent = originalText;
             }
         }
 
@@ -647,6 +799,8 @@
         }
 
         async function addProfile() {
+            const addBtn = document.getElementById('add-profile-btn');
+            const originalText = addBtn.textContent;
             const imageInput = document.getElementById('profile-images');
             const name = document.getElementById('profile-name').value.trim();
             const age = document.getElementById('profile-age').value;
@@ -675,6 +829,9 @@
                 }
             }
 
+            addBtn.disabled = true;
+            addBtn.textContent = 'Adding profile...';
+
             try {
                 const { data: { session } } = await supabaseClient.auth.getSession();
                 if (!session) {
@@ -700,23 +857,35 @@
                 };
 
                 await saveProfile(profileData);
-                loadAdminProfiles();
+                await loadAdminProfiles();
+                await loadProfiles();
                 clearForm();
-                alert('✅ Profile added! Will appear within 15 seconds.');
+                alert('✅ Profile added! Will appear shortly.');
             } catch (error) {
                 console.error('Save error:', error);
                 alert('❌ Save failed. Check storage permissions, RLS policies, and database connection.');
+            } finally {
+                addBtn.disabled = false;
+                addBtn.textContent = originalText;
             }
         }
 
-        async function deleteProfileAdmin(id) {
-            if (confirm('Delete this profile?')) {
-                try {
-                    await deleteProfile(id);
-                    loadAdminProfiles();
-                } catch (error) {
-                    alert('Delete failed: ' + error.message);
-                }
+        async function deleteProfileAdmin(id, button) {
+            if (!confirm('Delete this profile?')) return;
+            const originalText = button.textContent;
+            button.disabled = true;
+            button.textContent = 'Deleting...';
+
+            try {
+                await deleteProfile(id);
+                await loadAdminProfiles();
+                await loadProfiles();
+            } catch (error) {
+                alert('Delete failed: ' + error.message);
+                console.error('Delete error:', error);
+            } finally {
+                button.disabled = false;
+                button.textContent = originalText;
             }
         }
 
@@ -766,6 +935,7 @@
             document.getElementById('admin-login-btn').addEventListener('click', signInAdmin);
             document.getElementById('admin-logout-btn').addEventListener('click', signOutAdmin);
             document.getElementById('add-profile-btn').addEventListener('click', addProfile);
+            document.getElementById('retry-btn').addEventListener('click', () => loadProfiles());
             
             document.addEventListener('keydown', (e) => {
                 if (e.key === 'Escape') closePhotoModal();
@@ -792,6 +962,7 @@
             // FIXED: Proper initialization with error recovery
             setTimeout(() => {
                 startPolling();
+                checkConnectivity(); // Initial connectivity check
             }, 1000);
 
             checkAdminSession();
